@@ -3,7 +3,7 @@ import pandas as pd
 from main import load_today_lineup_data, train_and_predict_with_hr_score  # ensure these are imported correctly
 
 def app():
-    st.title("⚾ MLB Prop Predictor")
+    st.title("MLB Prop Predictor")
     st.markdown("### Today's Top Hit & HR Predictions")
     st.info("Top 3 Hitters and 1 HR Candidate Per Team")
 

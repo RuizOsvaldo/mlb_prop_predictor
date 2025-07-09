@@ -11,10 +11,10 @@ def train_and_predict_with_hr_score(df):
             return 0.1
 
     def hr_prob(row):
-        ev = row.get('avg_exit_velocity', 0)
+        ev = row.get('EV', 0)
         la = row.get('avg_launch_angle', 0)
-        barrel = row.get('barrel_pct', 0)
-        hh = row.get('hard_hit_pct', 0)
+        barrel = row.get('Barrel%', 0)
+        hh = row.get('HH%', 0)
 
         # Missing key data? Assign conservative floor.
         if ev == 0 or la == 0:
@@ -56,8 +56,12 @@ def train_and_predict_with_hr_score(df):
         # Environmental
         score += row.get('park_factor', 1.0)
         score += row.get('weather_factor', 1.0)
-
+        
+        score = (score / 11) * .25
         return round(score, 3)
+    
+    #Testing to see the columns in df
+    print(df.columns)
 
     df['hit_prob'] = df.apply(hit_prob, axis=1)
     df['hr_prob'] = df.apply(hr_prob, axis=1)

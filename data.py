@@ -100,7 +100,7 @@ def get_statcast_stats_batter(player_id, days=60):
         df = df[df['launch_angle'].notnull()]
         df = df[df['events'].notnull()]
         df = df[df['launch_speed'].between(60, 120)]  # clip outliers
-
+        
         if len(df) < 15:  # not enough data to be meaningful
             return {}
 
