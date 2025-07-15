@@ -1,49 +1,127 @@
 import streamlit as st
+from datetime import datetime
+import statsapi
+from pybaseball import batting_stats, pitching_stats, playerid_lookup
 import pandas as pd
-from main import load_today_lineup_data, train_and_predict_with_hr_score  # ensure these are imported correctly
 
-def app():
-    st.title("MLB Prop Predictor")
-    st.markdown("### Today's Top Hit & HR Predictions")
-    st.info("Top 3 Hitters and 1 HR Candidate Per Team")
+def get_schedule(date):
+    return statsapi.schedule(date=date)
 
-    with st.spinner("Loading data..."):
-        df = load_today_lineup_data()
-        df = train_and_predict_with_hr_score(df)
+def get_boxscore(game_id):
+    return statsapi.get('game_boxscore', {'gamePk': game_id})
 
-    teams = df['team'].dropna().unique()
+def extract_starters(players):
+    hitters = []
+    pitcher = None
+    for p in players.values():
+        person = p.get('person', {})
+        position = p.get('position', {}).get('abbreviation', 'NA')
+        pid = person.get('id')
+        name = person.get('fullName')
+        bo = p.get('battingOrder')
+        if bo and int(bo) > 0:
+            hitters.append({
+                'id': pid,
+                'name': name,
+                'position': position,
+                'batting_order': int(bo) // 100
+            })
+        elif position == 'P':
+            pitcher = {
+                'id': pid,
+                'name': name,
+                'position': 'P'
+            }
+    hitters.sort(key=lambda x: x['batting_order'])
+    return hitters, pitcher
 
-    for team in sorted(teams):
-        team_df = df[df['team'] == team].copy()
+def find_mlbam_id(name):
+    parts = name.split()
+    if len(parts) < 2:
+        return None
+    first_name = parts[0]
+    last_name = parts[-1]
+    try:
+        lookup = playerid_lookup(last_name, first_name)
+        if not lookup.empty:
+            return lookup.iloc[0]['key_mlbam']
+    except:
+        return None
+    return None
 
-        st.subheader(f"🏟️ {team}")
-        if team_df.empty:
-            st.warning("No data available for this team.")
-            continue
+def get_player_stats(name, bat_df, pit_df, is_pitcher=False):
+    mlbam_id = find_mlbam_id(name)
+    if is_pitcher:
+        stats_row = pit_df[pit_df['IDfg'] == mlbam_id] if mlbam_id else pd.DataFrame()
+        if not stats_row.empty:
+            stats = stats_row.iloc[0]
+            return {
+                'IP': stats['IP'],
+                'ERA': stats['ERA'],
+                'FIP': stats['FIP'],
+                'WHIP': stats['WHIP'],
+                'K/9': stats['K/9'],
+                'BB/9': stats['BB/9'],
+                'WAR': stats['WAR']
+            }
+    else:
+        stats_row = bat_df[bat_df['IDfg'] == mlbam_id] if mlbam_id else pd.DataFrame()
+        if not stats_row.empty:
+            stats = stats_row.iloc[0]
+            return {
+                'PA': stats['PA'],
+                'AVG': stats['AVG'],
+                'OBP': stats['OBP'],
+                'SLG': stats['SLG'],
+                'OPS': stats['OPS'],
+                'wOBA': stats['wOBA'],
+                'wRC+': stats['wRC+']
+            }
+    return None
 
-        # Top 3 Hitters
-        top_hitters = team_df.sort_values(by="hit_prob", ascending=False).head(3)
-        st.markdown("**Top 3 Hitters (Hit Probability):**")
-        for _, row in top_hitters.iterrows():
-            st.markdown(
-                f"- {row['player_name']} | Hit Prob: `{row['hit_prob']:.3f}` | "
-                f"EV: `{row.get('avg_exit_velocity', 'N/A'):.2f}` | "
-                f"LA: `{row.get('avg_launch_angle', 'N/A'):.2f}` | "
-                f"Hard Hit%: `{row.get('hard_hit_pct', 0) * 100:.1f}%` | "
-                f"xSLG: `{row.get('xSLG', 0):.3f}` | Barrel%: `{row.get('barrel_pct', 0) * 100:.1f}%`"
-            )
+st.title("MLB Starting Lineups & Sabermetrics")
 
-        # HR Candidate
-        top_hr = team_df.sort_values(by="hr_prob", ascending=False).head(1)
-        if not top_hr.empty:
-            hr_player = top_hr.iloc[0]
-            st.markdown("**💣 HR Candidate:**")
-            st.markdown(
-                f"- {hr_player['player_name']} | HR Prob: `{hr_player['hr_prob']:.3f}` | "
-                f"EV: `{hr_player.get('avg_exit_velocity', 'N/A'):.2f}` | "
-                f"LA: `{hr_player.get('avg_launch_angle', 'N/A'):.2f}` | "
-                f"Barrel%: `{hr_player.get('barrel_pct', 0) * 100:.1f}%`"
-            )
+date = st.date_input("Select date", value=datetime.now())
+year = date.year
 
-if __name__ == "__main__":
-    app()
+bat_df = batting_stats(year)
+pit_df = pitching_stats(year)
+
+schedule = get_schedule(date.strftime('%Y-%m-%d'))
+if not schedule:
+    st.info("No games scheduled for this date.")
+else:
+    for game in schedule:
+        game_id = game['game_id']
+        boxscore = get_boxscore(game_id)
+        teams = boxscore['teams']
+        for side in ['away', 'home']:
+            team_name = teams[side]['team']['name']
+            players = teams[side]['players']
+            hitters, pitcher = extract_starters(players)
+            st.subheader(f"{team_name} Lineup")
+            lineup_data = []
+            for h in hitters:
+                stats = get_player_stats(h['name'], bat_df, pit_df, is_pitcher=False)
+                if stats:
+                    lineup_data.append({
+                        "Order": h['batting_order'],
+                        "Name": h['name'],
+                        "Position": h['position'],
+                        **stats
+                    })
+                else:
+                    lineup_data.append({
+                        "Order": h['batting_order'],
+                        "Name": h['name'],
+                        "Position": h['position'],
+                        "PA": "N/A", "AVG": "N/A", "OBP": "N/A", "SLG": "N/A", "OPS": "N/A", "wOBA": "N/A", "wRC+": "N/A"
+                    })
+            st.dataframe(pd.DataFrame(lineup_data))
+            if pitcher:
+                stats = get_player_stats(pitcher['name'], bat_df, pit_df, is_pitcher=True)
+                if stats:
+                    st.write(f"**SP:** {pitcher['name']} ({pitcher['position']})")
+                    st.write(stats)
+                else:
+                    st.write(f"**SP:** {pitcher['name']} ({pitcher['position']}) - No stats found")
