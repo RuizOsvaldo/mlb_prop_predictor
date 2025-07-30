@@ -306,21 +306,32 @@ class SabermetricFeatureEngineer:
         Master function to create all engineered features
         """
         print("Starting comprehensive feature engineering...")
-        
+        # Debug: Show unique teams before feature engineering
+        if 'Team' in df.columns:
+            print("Teams in input df:", sorted(df['Team'].dropna().unique()))
+        else:
+            print("No 'Team' column in input df")
+
         # Create hit prediction features
         df_with_hit_features = self.create_hit_prediction_features(df)
-        
+
         # Create HR prediction features
         df_with_all_features = self.create_hr_prediction_features(df_with_hit_features)
-        
+
         # Add situational features
         df_with_situational = self.add_situational_features(df_with_all_features)
-        
+
         # Create interaction features
         final_df = self.create_interaction_features(df_with_situational)
-        
+
+        # Debug: Show unique teams after feature engineering
+        if 'Team' in final_df.columns:
+            print("Teams in engineered final_df:", sorted(final_df['Team'].dropna().unique()))
+        else:
+            print("No 'Team' column in engineered final_df")
+
         print(f"Feature engineering complete. Created {len(final_df.columns) - len(df.columns)} new features.")
-        
+
         return final_df
 
 # Example usage
