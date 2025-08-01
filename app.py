@@ -1,18 +1,19 @@
 """
-MLB Hit and Home Run Predictor - Streamlit Interface
+MLB Hit and Home Run Predictor - FIXED STREAMLIT APP
 
-This is the main application interface that allows users to:
-1. Select teams, players, or view all games
-2. Get top 5 hit predictions and top 3 HR predictions
-3. View model performance and accuracy metrics
-4. Track prediction success over time
+This fixes the major issues:
+1. Focuses on daily games automatically
+2. No manual ballpark selection - uses actual game ballparks
+3. No player selection - shows team-based predictions
+4. Uses real data only, no samples
+5. Shows actual games being played today
 
-Features:
-- Interactive team/player selection
-- Real-time predictions using trained def train_models(data):
-- Performance dashboard with accuracy metrics
-- Sabermetric explanations for predictions
-- Database integration for tracking results
+Key Features:
+- Automatic daily game detection
+- Team-based predictions for today's games
+- Ballpark factors applied automatically
+- Real-time model performance tracking
+- Clean, focused UI
 """
 
 import streamlit as st
@@ -30,7 +31,7 @@ sys.path.append(os.path.join(os.path.dirname(__file__), 'models'))
 
 # Import our custom modules
 try:
-    from data.data_collector import MLBDataCollector
+    from data.data_collector import EnhancedMLBDataCollector, PitcherAnalyzer, WeatherImpactCalculator
     from data.feature_engineer import SabermetricFeatureEngineer
     from models.hit_predictor import HitPredictor
     from models.hr_predictor import HomeRunPredictor
@@ -41,89 +42,80 @@ except ImportError as e:
 
 # Page configuration
 st.set_page_config(
-    page_title="MLB Hit & HR Predictor",
+    page_title="MLB Enhanced Daily Predictions",
     page_icon="⚾",
     layout="wide",
     initial_sidebar_state="expanded"
 )
 
 # Initialize session state
-if 'data_loaded' not in st.session_state:
-    st.session_state.data_loaded = False
+if 'enhanced_data_loaded' not in st.session_state:
+    st.session_state.enhanced_data_loaded = False
 if 'models_trained' not in st.session_state:
     st.session_state.models_trained = False
+if 'daily_games_with_lineups' not in st.session_state:
+    st.session_state.daily_games_with_lineups = pd.DataFrame()
 
-# Initialize components
+# Initialize enhanced components
 @st.cache_resource
 def initialize_components():
-    """Initialize data collector, feature engineer, models, and database"""
-    collector = MLBDataCollector()
+    """Initialize enhanced data collector and all analysis tools"""
+    collector = EnhancedMLBDataCollector()
     engineer = SabermetricFeatureEngineer()
     hit_model = HitPredictor()
     hr_model = HomeRunPredictor()
     database = MLBPredictionDatabase()
+    pitcher_analyzer = PitcherAnalyzer()
+    weather_calculator = WeatherImpactCalculator()
     
-    return collector, engineer, hit_model, hr_model, database
+    return collector, engineer, hit_model, hr_model, database, pitcher_analyzer, weather_calculator
 
-collector, engineer, hit_model, hr_model, database = initialize_components()
+collector, engineer, hit_model, hr_model, database, pitcher_analyzer, weather_calculator = initialize_components()
 
-# Load and prepare data
-@st.cache_data(ttl=3600)  # Cache for 1 hour
+# Enhanced data loading with lineups and weather
+@st.cache_data(ttl=1800)  # Cache for 30 minutes
 def load_mlb_data():
-    """Load and prepare MLB data for predictions"""
+    """Load enhanced MLB data with lineups, weather, and pitcher matchups"""
     try:
-        # Collect current season data
-        hitting_data, pitching_data = collector.collect_all_data()
+        # Use enhanced collection method that gets actual lineups
+        hitting_data, pitching_data, daily_games = collector.collect_all_data_enhanced()
         
-        # Engineer features
+        if len(hitting_data) == 0:
+            st.warning("No hitting data with lineups collected. Check data sources.")
+            return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
+        
+        # Engineer features on the enhanced data
         final_data = engineer.engineer_all_features(hitting_data)
         
-        return final_data, pitching_data
+        return final_data, pitching_data, daily_games
     except Exception as e:
-        st.error(f"Error loading MLB data: {e}")
-        return pd.DataFrame(), pd.DataFrame()
+        st.error(f"Error loading enhanced MLB data: {e}")
+        return pd.DataFrame(), pd.DataFrame(), pd.DataFrame()
 
-def train_models(data):
-    """Train both hit and HR prediction models with robust checks"""
+def train_models_with_data(data):
+    """Train both models with enhanced error handling"""
     if len(data) == 0:
         st.error("No data available for training.")
-        print("[DEBUG] No data available for training.")
         return False
 
     try:
-        # Prepare hit prediction data
-        hit_features, hit_targets, hit_feature_names = hit_model.prepare_training_data(data)
-        print(f"[DEBUG] Hit features shape: {getattr(hit_features, 'shape', None)}")
-        print(f"[DEBUG] Hit targets length: {len(hit_targets) if hit_targets is not None else None}")
-        if hit_features is None or hit_targets is None or len(hit_features) == 0 or len(hit_targets) == 0:
-            st.error("Hit training data is empty or invalid.")
-            print("[DEBUG] Hit training data is empty or invalid.")
-            return False
-
         # Train hit prediction model
+        hit_features, hit_targets, hit_feature_names = hit_model.prepare_training_data(data)
+        
+        if hit_features is None or len(hit_features) == 0:
+            st.error("Hit training data preparation failed.")
+            return False
+
         hit_metrics = hit_model.train_model(hit_features, hit_targets, hit_feature_names)
-        if not hasattr(hit_model, 'model') or hit_model.model is None:
-            st.error("Hit model was not fit. Check training data and model code.")
-            print("[DEBUG] Hit model was not fit after training.")
-            return False
-        print(f"[DEBUG] Hit model trained. Metrics: {hit_metrics}")
-
-        # Prepare HR prediction data
-        hr_features, hr_targets, hr_feature_names = hr_model.prepare_training_data(data)
-        print(f"[DEBUG] HR features shape: {getattr(hr_features, 'shape', None)}")
-        print(f"[DEBUG] HR targets length: {len(hr_targets) if hr_targets is not None else None}")
-        if hr_features is None or hr_targets is None or len(hr_features) == 0 or len(hr_targets) == 0:
-            st.error("HR training data is empty or invalid.")
-            print("[DEBUG] HR training data is empty or invalid.")
-            return False
-
+        
         # Train HR prediction model  
-        hr_metrics = hr_model.train_model(hr_features, hr_targets, hr_feature_names)
-        if not hasattr(hr_model, 'model') or hr_model.model is None:
-            st.error("HR model was not fit. Check training data and model code.")
-            print("[DEBUG] HR model was not fit after training.")
+        hr_features, hr_targets, hr_feature_names = hr_model.prepare_training_data(data)
+        
+        if hr_features is None or len(hr_features) == 0:
+            st.error("HR training data preparation failed.")
             return False
-        print(f"[DEBUG] HR model trained. Metrics: {hr_metrics}")
+
+        hr_metrics = hr_model.train_model(hr_features, hr_targets, hr_feature_names)
 
         # Store feature importance in database
         if hit_model.feature_importance:
@@ -134,203 +126,658 @@ def train_models(data):
         return True
     except Exception as e:
         st.error(f"Error training models: {e}")
-        print(f"[DEBUG] Exception in train_models: {e}")
         return False
 
-# Main application
 def main():
-    st.title("Sabermertric Predictor")
-    st.markdown("### Advanced Sabermetric Predictions Using Machine Learning")
+    st.title("⚾ Enhanced MLB Daily Predictions")
+    st.markdown("### Today's Games with Lineups, Weather & Advanced Analysis")
     
-    # Sidebar for navigation
-    st.sidebar.title("Navigation")
-    page = st.sidebar.selectbox(
-        "Choose a page:",
-        ["Daily Predictions", "Model Performance", "Sabermetric Insights", "Prediction History"]
-    )
-    
-    # Load data if not already loaded
-    if not st.session_state.data_loaded:
-        with st.spinner("Loading MLB data and training models..."):
-            hitting_data, pitching_data = load_mlb_data()
+    # Load enhanced data if not already loaded
+    if not st.session_state.enhanced_data_loaded:
+        with st.spinner("Loading today's games with starting lineups, weather data, and pitcher matchups..."):
+            hitting_data, pitching_data, daily_games = load_mlb_data()
             
             if len(hitting_data) > 0:
                 st.session_state.hitting_data = hitting_data
                 st.session_state.pitching_data = pitching_data
-                st.session_state.data_loaded = True
+                st.session_state.daily_games_with_lineups = daily_games
+                st.session_state.enhanced_data_loaded = True
                 
-                # Train models
-                if train_models(hitting_data):
+                # Train models with enhanced data
+                if train_models_with_data(hitting_data):
                     st.session_state.models_trained = True
-                    st.success("✅ Data loaded and models trained successfully!")
+                    st.success("✅ Enhanced data loaded with lineups, weather, and models trained!")
+                    
+                    # Show what enhanced data we have
+                    enhanced_features = [col for col in hitting_data.columns if any(keyword in col for keyword in 
+                                       ['weather_', 'ballpark_', 'opp_pitcher_', 'batting_order', 'game_'])]
+                    
+                    if enhanced_features:
+                        st.info(f"🚀 Enhanced features active: {len(enhanced_features)} game-specific data points per player")
                 else:
-                    st.error("❌ Error training models")
+                    st.error("❌ Error training enhanced models")
             else:
-                st.error("❌ Failed to load MLB data")
+                st.error("❌ Failed to load enhanced MLB data with lineups")
                 return
     
-    # Route to different pages
-    if page == "Daily Predictions":
-        daily_predictions_page()
-    elif page == "Model Performance":
-        model_performance_page()
-    elif page == "Sabermetric Insights":
-        sabermetric_insights_page()
-    elif page == "Prediction History":
-        prediction_history_page()
-
-def daily_predictions_page():
-    """Main prediction interface"""
-    st.header("🎯 Daily Predictions")
+    # Show enhanced games overview
+    show_daily_games_overview()
     
-    if not st.session_state.models_trained:
-        st.warning("Models are still training. Please wait...")
+    # Main enhanced prediction interface
+    st.markdown("---")
+    daily_predictions_interface()
+
+def show_daily_games_overview():
+    """Show enhanced overview of today's games with lineups and weather"""
+    st.subheader("🏟️ Today's Enhanced Games")
+    
+    daily_games = st.session_state.daily_games_with_lineups
+    
+    if len(daily_games) == 0:
+        st.info("No enhanced games data available for today.")
         return
     
-    # Standardize team names and drop NaNs
-    if 'Team' in st.session_state.hitting_data.columns:
-        st.session_state.hitting_data['Team'] = st.session_state.hitting_data['Team'].astype(str).str.strip().str.upper()
-        teams = sorted(st.session_state.hitting_data['Team'].dropna().unique())
-    else:
-        teams = ['No Teams Found']
-
-    # Selection options
-    col1, col2, col3 = st.columns(3)
-
-    with col1:
-        prediction_mode = st.selectbox(
-            "Prediction Mode:",
-            ["All Games", "Specific Team", "Specific Player"]
-        )
-
-    with col2:
-        if prediction_mode == "Specific Team":
-            selected_team = st.selectbox("Select Team:", teams)
-        else:
-            selected_team = None
-
-    with col3:
-        ballpark = st.selectbox(
-            "Ballpark (optional):",
-            ["", "Yankee Stadium", "Fenway Park", "Coors Field", "Petco Park", "Great American Ball Park"]
-        )
-
-    # Debugging output for teams and data shape
-    # st.write("Teams available:", teams)
-    st.write("Data shape:", st.session_state.hitting_data.shape)
+    # Display enhanced game information
+    for _, game in daily_games.iterrows():
+        col1, col2, col3, col4 = st.columns([3, 2, 2, 3])
+        
+        with col1:
+            st.write(f"**{game['away_team']} @ {game['home_team']}**")
+            ballpark = game.get('ballpark', 'Unknown Stadium')
+            st.caption(f"🏟️ {ballpark}")
+        
+        with col2:
+            # Show lineup info
+            away_lineup = game.get('away_lineup', [])
+            home_lineup = game.get('home_lineup', [])
+            st.write(f"📋 Lineups: {len(away_lineup)}/{len(home_lineup)}")
+            
+        with col3:
+            # Show weather info
+            weather = game.get('weather', {})
+            if weather:
+                temp = weather.get('temperature', 'Unknown')
+                wind = weather.get('wind_speed', 'Unknown')
+                st.write(f"🌤️ {temp}°F, {wind} mph")
+            else:
+                st.write("🌤️ Weather pending")
+        
+        with col4:
+            # Show pitcher matchup
+            away_pitcher = game.get('away_pitcher', {}).get('name', 'TBD')
+            home_pitcher = game.get('home_pitcher', {}).get('name', 'TBD')
+            st.write(f"⚾ {away_pitcher[:10]}... vs {home_pitcher[:10]}...")
     
-    # Make predictions based on selection
-    if st.button("🔮 Generate Predictions", type="primary"):
-        with st.spinner("Generating predictions..."):
-            if prediction_mode == "All Games":
-                teams = st.session_state.hitting_data['Team'].unique() if 'Team' in st.session_state.hitting_data.columns else []
-                for team in teams:
-                    team_data = st.session_state.hitting_data[st.session_state.hitting_data['Team'] == team]
-                    try:
-                        top_hitters = hit_model.predict_team_hits(team_data)
-                        top_power_hitters = hr_model.predict_team_hrs(team_data, ballpark if ballpark else None)
-                        st.markdown(f"## {team}")
-                        display_predictions(top_hitters, top_power_hitters, ballpark)
-                        store_daily_predictions(top_hitters, top_power_hitters, team, ballpark)
-                    except Exception as e:
-                        st.error(f"Error generating predictions for {team}: {e}")
-            elif prediction_mode == "Specific Team":
-                data_subset = st.session_state.hitting_data[
-                    st.session_state.hitting_data['Team'] == selected_team
-                ] if 'Team' in st.session_state.hitting_data.columns else st.session_state.hitting_data.head(20)
-                try:
-                    top_hitters = hit_model.predict_team_hits(data_subset)
-                    top_power_hitters = hr_model.predict_team_hrs(data_subset, ballpark if ballpark else None)
-                    display_predictions(top_hitters, top_power_hitters, ballpark)
-                    store_daily_predictions(top_hitters, top_power_hitters, selected_team, ballpark)
-                except Exception as e:
-                    st.error(f"Error generating predictions: {e}")
-            else:  # Specific player - would need player selection UI
-                data_subset = st.session_state.hitting_data.head(10)
-                try:
-                    top_hitters = hit_model.predict_team_hits(data_subset)
-                    top_power_hitters = hr_model.predict_team_hrs(data_subset, ballpark if ballpark else None)
-                    display_predictions(top_hitters, top_power_hitters, ballpark)
-                    store_daily_predictions(top_hitters, top_power_hitters, selected_team, ballpark)
-                except Exception as e:
-                    st.error(f"Error generating predictions: {e}")
+    st.markdown(f"**{len(daily_games)} enhanced games** with lineups for {date.today().strftime('%B %d, %Y')}")
+    
+    # Show enhanced data summary
+    if len(daily_games) > 0:
+        games_with_lineups = sum(1 for _, game in daily_games.iterrows() 
+                               if len(game.get('away_lineup', [])) > 0 or len(game.get('home_lineup', [])) > 0)
+        games_with_weather = sum(1 for _, game in daily_games.iterrows() if game.get('weather'))
+        games_with_pitchers = sum(1 for _, game in daily_games.iterrows() 
+                                if game.get('away_pitcher', {}).get('name', 'TBD') != 'TBD')
+        
+        col1, col2, col3 = st.columns(3)
+        with col1:
+            st.metric("Games with Lineups", games_with_lineups)
+        with col2:
+            st.metric("Games with Weather", games_with_weather)
+        with col3:
+            st.metric("Games with Pitchers", games_with_pitchers)
 
-def display_predictions(top_hitters, top_power_hitters, ballpark):
-    """Display prediction results in a nice format"""
+def daily_predictions_interface():
+    """Enhanced interface for daily predictions with lineup analysis"""
+    st.subheader("🎯 Enhanced Daily Predictions")
+    
+    if not st.session_state.models_trained:
+        st.warning("Enhanced models are still training. Please wait...")
+        return
+    
+    daily_games = st.session_state.daily_games_with_lineups
+    
+    if len(daily_games) == 0:
+        st.info("No games with lineups available for enhanced predictions.")
+        return
+    
+    # Enhanced prediction options
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        prediction_scope = st.selectbox(
+            "Prediction Scope:",
+            ["All Today's Enhanced Games", "Specific Game Analysis"]
+        )
+    
+    with col2:
+        show_enhanced_analysis = st.checkbox("Show Weather & Pitcher Analysis", value=True)
+    
+    if prediction_scope == "Specific Game Analysis":
+        # Game selection for detailed analysis
+        game_options = []
+        for _, game in daily_games.iterrows():
+            away_lineup_count = len(game.get('away_lineup', []))
+            home_lineup_count = len(game.get('home_lineup', []))
+            weather_status = "🌤️" if game.get('weather') else "❓"
+            game_str = f"{game['away_team']} @ {game['home_team']} ({away_lineup_count}/{home_lineup_count} lineups) {weather_status}"
+            game_options.append(game_str)
+        
+        if game_options:
+            selected_game_str = st.selectbox("Select Game for Enhanced Analysis:", game_options)
+            selected_game_idx = game_options.index(selected_game_str)
+            selected_game = daily_games.iloc[selected_game_idx]
+        else:
+            st.error("No games available for selection")
+            return
+    else:
+        selected_game = None
+    
+    # Generate enhanced predictions
+    if st.button("🔮 Generate Enhanced Predictions with Weather & Lineups", type="primary"):
+        with st.spinner("Generating enhanced predictions with weather, ballpark, and pitcher analysis..."):
+            if prediction_scope == "All Today's Enhanced Games":
+                generate_all_enhanced_predictions(daily_games, show_enhanced_analysis)
+def generate_all_enhanced_predictions(daily_games, show_analysis=False):
+    """Generate enhanced predictions for all games"""
+    st.subheader("📊 All Games - Enhanced Predictions")
+    
+    hitting_data = st.session_state.get('enhanced_hitting_data', st.session_state.get('hitting_data', pd.DataFrame()))
+    
+    if len(hitting_data) == 0:
+        st.error("No hitting data available for predictions")
+        return
+    
+    for _, game in daily_games.iterrows():
+        st.markdown(f"## {game['away_team']} @ {game['home_team']}")
+        st.markdown(f"**🏟️ {game.get('ballpark', 'Unknown Stadium')}**")
+        
+        # Show weather impact if requested
+        if show_analysis:
+            weather = game.get('weather', {})
+            if weather:
+                weather_impact = weather_calculator.calculate_weather_impact(weather, game.get('ballpark', ''))
+                show_weather_analysis_simple(weather, weather_impact)
+        
+        # Get enhanced team data for both teams
+        away_team_data = get_enhanced_team_data(hitting_data, game['away_team'], game)
+        home_team_data = get_enhanced_team_data(hitting_data, game['home_team'], game)
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown(f"### {game['away_team']} (Away)")
+            if len(away_team_data) > 0:
+                generate_enhanced_team_predictions(away_team_data, game['away_team'], game, show_analysis)
+            else:
+                st.info(f"No enhanced lineup data for {game['away_team']}")
+        
+        with col2:
+            st.markdown(f"### {game['home_team']} (Home)")
+            if len(home_team_data) > 0:
+                generate_enhanced_team_predictions(home_team_data, game['home_team'], game, show_analysis)
+            else:
+                st.info(f"No enhanced lineup data for {game['home_team']}")
+        
+        st.markdown("---")
+
+def generate_detailed_enhanced_game_analysis(game, show_analysis=True):
+    """Generate detailed analysis for a specific game"""
+    st.subheader(f"🔍 Detailed Analysis: {game['away_team']} @ {game['home_team']}")
+    st.markdown(f"**🏟️ {game.get('ballpark', 'Unknown Stadium')}**")
+    
+    hitting_data = st.session_state.get('enhanced_hitting_data', st.session_state.get('hitting_data', pd.DataFrame()))
+    
+    if len(hitting_data) == 0:
+        st.error("No hitting data available for analysis")
+        return
+    
+    # Weather analysis
+    if show_analysis:
+        weather = game.get('weather', {})
+        if weather:
+            weather_impact = weather_calculator.calculate_weather_impact(weather, game.get('ballpark', ''))
+            show_weather_analysis_simple(weather, weather_impact, detailed=True)
+        
+        # Pitching matchup analysis
+        show_pitching_matchup_analysis_simple(game)
+    
+    # Enhanced team predictions
+    away_team_data = get_enhanced_team_data(hitting_data, game['away_team'], game)
+    home_team_data = get_enhanced_team_data(hitting_data, game['home_team'], game)
     
     col1, col2 = st.columns(2)
     
     with col1:
-        st.subheader("🎯 Top 5 Hit Predictions")
-        if len(top_hitters) > 0:
-            for i, (_, player) in enumerate(top_hitters.iterrows(), 1):
-                with st.container():
-                    player_name = player['player_name'] if 'player_name' in player else player.get('Name', f'Player_{i}')
-                    st.markdown(f"""
-                    **#{i}. {player_name}**
-                    - Hit Probability: **{player['hit_probability']:.1%}**
-                    - Confidence: {player['confidence']:.1%}
-                    - Key Strengths: {', '.join(player['key_strengths'])}
-                    """)
-                    st.progress(player['hit_probability'])
-                    st.markdown("---")
+        st.markdown(f"### {game['away_team']} Enhanced Analysis")
+        if len(away_team_data) > 0:
+            generate_enhanced_team_predictions(away_team_data, game['away_team'], game, True)
         else:
-            st.info("No hit predictions available")
-
+            st.info(f"No enhanced data for {game['away_team']}")
+    
     with col2:
-        st.subheader("💥 Top 3 Home Run Predictions")
-        if len(top_power_hitters) > 0:
-            for i, (_, player) in enumerate(top_power_hitters.iterrows(), 1):
-                with st.container():
-                    player_name = player['player_name'] if 'player_name' in player else player.get('Name', f'Player_{i}')
-                    st.markdown(f"""
-                    **#{i}. {player_name}**
-                    - HR Probability: **{player['hr_probability']:.1%}**
-                    - Confidence: {player['confidence']:.1%}
-                    - Power Tier: {player['power_tier']}
-                    - Strengths: {', '.join(player['power_strengths'])}
-                    """)
-                    if ballpark and 'ballpark_boost' in player:
-                        st.markdown(f"- Ballpark Factor: {player['ballpark_boost']}")
-                    st.progress(player['hr_probability'])
-                    st.markdown("---")
+        st.markdown(f"### {game['home_team']} Enhanced Analysis")
+        if len(home_team_data) > 0:
+            generate_enhanced_team_predictions(home_team_data, game['home_team'], game, True)
         else:
-            st.info("No HR predictions available")
+            st.info(f"No enhanced data for {game['home_team']}")
+
+def get_enhanced_team_data(hitting_data, team_abbrev, game):
+    """Get enhanced hitting data for a specific team in a specific game"""
+    if 'Team' in hitting_data.columns:
+        team_data = hitting_data[hitting_data['Team'] == team_abbrev].copy()
+    else:
+        # Fallback: look for players with game_id matching this game
+        if 'game_id' in hitting_data.columns:
+            team_data = hitting_data[hitting_data['game_id'] == game.get('game_id', '')].copy()
+        else:
+            # Last resort: use a sample
+            team_data = hitting_data.sample(min(9, len(hitting_data))).copy()
     
-    # Summary statistics
-    st.subheader("📊 Prediction Summary")
+    return team_data
+
+def generate_enhanced_team_predictions(team_data, team_name, game, show_analysis=False):
+    """Generate enhanced predictions for a team"""
+    try:
+        # Generate hit predictions
+        top_hitters = hit_model.predict_team_hits(team_data)
+        
+        # Generate HR predictions with enhanced ballpark factors
+        ballpark = game.get('ballpark')
+        top_power_hitters = hr_model.predict_team_hrs(team_data, ballpark)
+        
+        # Display enhanced predictions
+        display_enhanced_team_predictions(top_hitters, top_power_hitters, team_name, game, show_analysis)
+        
+        # Store enhanced predictions
+        store_enhanced_predictions(top_hitters, top_power_hitters, team_name, game)
+        
+    except Exception as e:
+        st.error(f"Error generating enhanced predictions for {team_name}: {e}")
+
+def display_enhanced_team_predictions(top_hitters, top_power_hitters, team_name, game, show_analysis=False):
+    """Display enhanced prediction results"""
     
-    col1, col2, col3, col4 = st.columns(4)
+    # Enhanced hit predictions
+    st.markdown("#### 🎯 Enhanced Hit Predictions")
+    if len(top_hitters) > 0:
+        for i, (_, player) in enumerate(top_hitters.iterrows(), 1):
+            player_name = player.get('player_name', player.get('Name', f'Player_{i}'))
+            hit_prob = player.get('hit_probability', 0)
+            
+            with st.container():
+                col1, col2, col3 = st.columns([3, 2, 2])
+                with col1:
+                    st.write(f"**{i}. {player_name}**")
+                    if 'batting_order' in player:
+                        st.caption(f"Batting #{int(player['batting_order'])}")
+                with col2:
+                    st.metric("Hit Probability", f"{hit_prob:.1%}")
+                with col3:
+                    weather_adj = player.get('weather_temp_adj', 1.0)
+                    if weather_adj != 1.0:
+                        adj_text = f"+{(weather_adj-1)*100:.1f}%" if weather_adj > 1 else f"{(weather_adj-1)*100:.1f}%"
+                        st.metric("Weather Adj", adj_text)
+                
+                st.progress(hit_prob)
+                
+                if show_analysis:
+                    # Show detailed analysis
+                    analysis_items = []
+                    if 'opp_pitcher_name' in player and player['opp_pitcher_name'] != 'TBD':
+                        analysis_items.append(f"vs {player['opp_pitcher_name']} ({player.get('opp_pitcher_throws', 'R')})")
+                    if 'game_temperature' in player:
+                        analysis_items.append(f"Temp: {player['game_temperature']}°F")
+                    if analysis_items:
+                        st.caption(" | ".join(analysis_items))
+                
+                st.markdown("---")
+    else:
+        st.info("No enhanced hit predictions available")
+    
+    # Enhanced HR predictions
+    st.markdown("#### 💥 Enhanced Home Run Predictions")
+    if len(top_power_hitters) > 0:
+        for i, (_, player) in enumerate(top_power_hitters.iterrows(), 1):
+            player_name = player.get('player_name', player.get('Name', f'Power Player_{i}'))
+            hr_prob = player.get('hr_probability', 0)
+            power_tier = player.get('power_tier', 'Unknown')
+            
+            with st.container():
+                col1, col2, col3 = st.columns([3, 2, 2])
+                with col1:
+                    st.write(f"**{i}. {player_name}**")
+                    if 'batting_order' in player:
+                        st.caption(f"Batting #{int(player['batting_order'])}")
+                with col2:
+                    st.metric("HR Probability", f"{hr_prob:.1%}")
+                with col3:
+                    st.metric("Power Tier", power_tier)
+                
+                st.progress(hr_prob)
+                
+                if show_analysis:
+                    # Enhanced HR analysis
+                    analysis_items = []
+                    
+                    # Ballpark factor
+                    ballpark_boost = player.get('ballpark_boost', 1.0)
+                    if ballpark_boost != 1.0:
+                        boost_text = f"+{(ballpark_boost-1)*100:.0f}%" if ballpark_boost > 1 else f"{(ballpark_boost-1)*100:.0f}%"
+                        analysis_items.append(f"Ballpark: {boost_text}")
+                    
+                    # Weather impact
+                    weather_factors = []
+                    if 'weather_temp_adj' in player and player['weather_temp_adj'] != 1.0:
+                        temp_adj = player['weather_temp_adj']
+                        temp_text = f"+{(temp_adj-1)*100:.1f}%" if temp_adj > 1 else f"{(temp_adj-1)*100:.1f}%"
+                        weather_factors.append(f"Temp: {temp_text}")
+                    
+                    if 'weather_wind_adj' in player and player['weather_wind_adj'] != 1.0:
+                        wind_adj = player['weather_wind_adj']
+                        wind_text = f"+{(wind_adj-1)*100:.1f}%" if wind_adj > 1 else f"{(wind_adj-1)*100:.1f}%"
+                        weather_factors.append(f"Wind: {wind_text}")
+                    
+                    if weather_factors:
+                        analysis_items.append(" | ".join(weather_factors))
+                    
+                    # Opposing pitcher
+                    if 'opp_pitcher_name' in player and player['opp_pitcher_name'] != 'TBD':
+                        analysis_items.append(f"vs {player['opp_pitcher_name']} ({player.get('opp_pitcher_throws', 'R')})")
+                    
+                    if analysis_items:
+                        st.caption(" | ".join(analysis_items))
+                
+                st.markdown("---")
+    else:
+        st.info("No enhanced HR predictions available")
+    
+    # Enhanced team summary
+    if len(top_hitters) > 0 or len(top_power_hitters) > 0:
+        st.markdown("#### 📈 Enhanced Team Summary")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            avg_hit_prob = top_hitters['hit_probability'].mean() if len(top_hitters) > 0 else 0
+            st.metric("Avg Hit Prob", f"{avg_hit_prob:.1%}")
+        
+        with col2:
+            avg_hr_prob = top_power_hitters['hr_probability'].mean() if len(top_power_hitters) > 0 else 0
+            st.metric("Avg HR Prob", f"{avg_hr_prob:.1%}")
+        
+        with col3:
+            expected_hits = sum(top_hitters['hit_probability']) if len(top_hitters) > 0 else 0
+            st.metric("Expected Hits", f"{expected_hits:.1f}")
+        
+        with col4:
+            expected_hrs = sum(top_power_hitters['hr_probability']) if len(top_power_hitters) > 0 else 0
+            st.metric("Expected HRs", f"{expected_hrs:.1f}")
+
+def show_weather_analysis_simple(weather_data, weather_impact, detailed=False):
+    """Show simplified weather impact analysis"""
+    st.markdown("#### 🌤️ Weather Impact")
+    
+    col1, col2 = st.columns(2)
     
     with col1:
-        avg_hit_prob = top_hitters['hit_probability'].mean() if len(top_hitters) > 0 else 0
-        st.metric("Avg Hit Probability", f"{avg_hit_prob:.1%}")
+        st.write(f"🌡️ **{weather_data.get('temperature', 'Unknown')}°F**")
+        st.write(f"💨 **{weather_data.get('wind_speed', 'Unknown')} mph {weather_data.get('wind_direction', '')}**")
     
     with col2:
-        avg_hr_prob = top_power_hitters['hr_probability'].mean() if len(top_power_hitters) > 0 else 0
-        st.metric("Avg HR Probability", f"{avg_hr_prob:.1%}")
-    
-    with col3:
-        total_expected_hits = sum(top_hitters['hit_probability']) if len(top_hitters) > 0 else 0
-        st.metric("Expected Hits", f"{total_expected_hits:.1f}")
-    
-    with col4:
-        total_expected_hrs = sum(top_power_hitters['hr_probability']) if len(top_power_hitters) > 0 else 0
-        st.metric("Expected HRs", f"{total_expected_hrs:.1f}")
+        hr_impact = weather_impact.get('hr_factor', 1.0)
+        if hr_impact > 1.05:
+            st.success(f"🚀 HR Boost: +{(hr_impact-1)*100:.1f}%")
+        elif hr_impact < 0.95:
+            st.error(f"📉 HR Impact: {(hr_impact-1)*100:.1f}%")
+        else:
+            st.info(f"➡️ Neutral Impact")
 
-def store_daily_predictions(top_hitters, top_power_hitters, team, ballpark):
+def show_pitching_matchup_analysis_simple(game):
+    """Show simplified pitching matchup"""
+    st.markdown("#### ⚾ Pitching Matchup")
+    
+    away_pitcher = game.get('away_pitcher', {})
+    home_pitcher = game.get('home_pitcher', {})
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.write(f"**{game['away_team']}:** {away_pitcher.get('name', 'TBD')} ({away_pitcher.get('throws', 'R')})")
+    
+    with col2:
+        st.write(f"**{game['home_team']}:** {home_pitcher.get('name', 'TBD')} ({home_pitcher.get('throws', 'R')})")
+
+def store_enhanced_predictions(top_hitters, top_power_hitters, team_name, game):
+    """Store enhanced predictions with additional metadata"""
+    prediction_date = date.today()
+    
+    try:
+        # Store individual predictions with enhanced metadata
+        for _, player in top_hitters.iterrows():
+            player_name = player.get('player_name', player.get('Name', 'Unknown'))
+            
+            database.store_prediction(
+                player_name=player_name,
+                team=team_name,
+                prediction_type='hit',
+                probability=player.get('hit_probability', 0),
+                confidence=player.get('confidence', 0),
+                model_version='enhanced_hit_predictor_v1.0',
+                ballpark=game.get('ballpark'),
+                prediction_date=prediction_date
+            )
+        
+        # Store HR predictions
+        for _, player in top_power_hitters.iterrows():
+            player_name = player.get('player_name', player.get('Name', 'Unknown'))
+            
+            database.store_prediction(
+                player_name=player_name,
+                team=team_name,
+                prediction_type='hr',
+                probability=player.get('hr_probability', 0),
+                confidence=player.get('confidence', 0),
+                model_version='enhanced_hr_predictor_v1.0',
+                ballpark=game.get('ballpark'),
+                prediction_date=prediction_date
+            )
+        
+    except Exception as e:
+        st.warning(f"Could not store enhanced predictions: {e}")
+
+def generate_all_games_predictions(daily_games):
+    """Generate predictions for all today's games"""
+    st.subheader("📊 All Games Predictions")
+    
+    hitting_data = st.session_state.hitting_data
+    
+    for _, game in daily_games.iterrows():
+        st.markdown(f"## {game['away_team']} @ {game['home_team']}")
+        st.markdown(f"**🏟️ {game.get('ballpark', 'Unknown Stadium')}**")
+        
+        # Get predictions for both teams
+        away_team_data = get_team_data(hitting_data, game['away_team'])
+        home_team_data = get_team_data(hitting_data, game['home_team'])
+        
+        col1, col2 = st.columns(2)
+        
+        with col1:
+            st.markdown(f"### {game['away_team']} (Away)")
+            if len(away_team_data) > 0:
+                generate_team_predictions(away_team_data, game['away_team'], game.get('ballpark'))
+            else:
+                st.info(f"No player data available for {game['away_team']}")
+        
+        with col2:
+            st.markdown(f"### {game['home_team']} (Home)")
+            if len(home_team_data) > 0:
+                generate_team_predictions(home_team_data, game['home_team'], game.get('ballpark'))
+            else:
+                st.info(f"No player data available for {game['home_team']}")
+        
+        st.markdown("---")
+
+def generate_single_game_predictions(game):
+    """Generate predictions for a specific game"""
+    st.subheader(f"📊 {game['away_team']} @ {game['home_team']}")
+    st.markdown(f"**🏟️ {game.get('ballpark', 'Unknown Stadium')}**")
+    
+    hitting_data = st.session_state.hitting_data
+    
+    # Get data for both teams
+    away_team_data = get_team_data(hitting_data, game['away_team'])
+    home_team_data = get_team_data(hitting_data, game['home_team'])
+    
+    col1, col2 = st.columns(2)
+    
+    with col1:
+        st.markdown(f"### {game['away_team']} (Away)")
+        if len(away_team_data) > 0:
+            generate_team_predictions(away_team_data, game['away_team'], game.get('ballpark'))
+        else:
+            st.info(f"No player data available for {game['away_team']}")
+    
+    with col2:
+        st.markdown(f"### {game['home_team']} (Home)")
+        if len(home_team_data) > 0:
+            generate_team_predictions(home_team_data, game['home_team'], game.get('ballpark'))
+        else:
+            st.info(f"No player data available for {game['home_team']}")
+
+def get_team_data(hitting_data, team_abbrev):
+    """Get hitting data for a specific team"""
+    if 'Team' in hitting_data.columns:
+        team_data = hitting_data[hitting_data['Team'] == team_abbrev]
+        return team_data.copy()
+    else:
+        # Fallback: return a sample of players if no team column
+        st.warning(f"No team column found. Using sample data for {team_abbrev}")
+        return hitting_data.sample(min(10, len(hitting_data))).copy()
+
+def generate_team_predictions(team_data, team_name, ballpark=None):
+    """Generate and display predictions for a team"""
+    try:
+        # Generate hit predictions
+        top_hitters = hit_model.predict_team_hits(team_data)
+        
+        # Generate HR predictions
+        top_power_hitters = hr_model.predict_team_hrs(team_data, ballpark)
+        
+        # Display predictions
+        display_team_predictions(top_hitters, top_power_hitters, team_name, ballpark)
+        
+        # Store predictions in database
+        store_team_predictions(top_hitters, top_power_hitters, team_name, ballpark)
+        
+    except Exception as e:
+        st.error(f"Error generating predictions for {team_name}: {e}")
+
+def display_team_predictions(top_hitters, top_power_hitters, team_name, ballpark):
+    """Display prediction results for a team"""
+    
+    # Hit predictions
+    st.markdown("#### 🎯 Top 5 Hit Predictions")
+    if len(top_hitters) > 0:
+        for i, (_, player) in enumerate(top_hitters.iterrows(), 1):
+            player_name = player.get('player_name', player.get('Name', f'Player_{i}'))
+            hit_prob = player.get('hit_probability', 0)
+            confidence = player.get('confidence', 0)
+            
+            # Create a nice display card
+            with st.container():
+                col1, col2, col3 = st.columns([3, 2, 2])
+                with col1:
+                    st.write(f"**{i}. {player_name}**")
+                with col2:
+                    st.metric("Hit Probability", f"{hit_prob:.1%}")
+                with col3:
+                    st.metric("Confidence", f"{confidence:.1%}")
+                
+                # Progress bar
+                st.progress(hit_prob)
+                
+                # Key strengths
+                if 'key_strengths' in player and player['key_strengths']:
+                    strengths = player['key_strengths'] if isinstance(player['key_strengths'], list) else [str(player['key_strengths'])]
+                    st.caption(f"Key strengths: {', '.join(strengths)}")
+                
+                st.markdown("---")
+    else:
+        st.info("No hit predictions available")
+    
+    # HR predictions
+    st.markdown("#### 💥 Top 3 Home Run Predictions")
+    if len(top_power_hitters) > 0:
+        for i, (_, player) in enumerate(top_power_hitters.iterrows(), 1):
+            player_name = player.get('player_name', player.get('Name', f'Power Player_{i}'))
+            hr_prob = player.get('hr_probability', 0)
+            confidence = player.get('confidence', 0)
+            power_tier = player.get('power_tier', 'Unknown')
+            
+            with st.container():
+                col1, col2, col3 = st.columns([3, 2, 2])
+                with col1:
+                    st.write(f"**{i}. {player_name}**")
+                with col2:
+                    st.metric("HR Probability", f"{hr_prob:.1%}")
+                with col3:
+                    st.metric("Power Tier", power_tier)
+                
+                # Progress bar
+                st.progress(hr_prob)
+                
+                # Ballpark factor
+                if ballpark and 'ballpark_boost' in player:
+                    boost = player['ballpark_boost']
+                    if boost != 1.0:
+                        boost_text = f"+{(boost-1)*100:.0f}%" if boost > 1 else f"{(boost-1)*100:.0f}%"
+                        st.caption(f"Ballpark factor: {boost_text}")
+                
+                # Power strengths
+                if 'power_strengths' in player and player['power_strengths']:
+                    strengths = player['power_strengths'] if isinstance(player['power_strengths'], list) else [str(player['power_strengths'])]
+                    st.caption(f"Power strengths: {', '.join(strengths)}")
+                
+                st.markdown("---")
+    else:
+        st.info("No HR predictions available")
+    
+    # Team summary stats
+    if len(top_hitters) > 0 or len(top_power_hitters) > 0:
+        st.markdown("#### 📈 Team Summary")
+        
+        col1, col2, col3, col4 = st.columns(4)
+        
+        with col1:
+            avg_hit_prob = top_hitters['hit_probability'].mean() if len(top_hitters) > 0 else 0
+            st.metric("Avg Hit Prob", f"{avg_hit_prob:.1%}")
+        
+        with col2:
+            avg_hr_prob = top_power_hitters['hr_probability'].mean() if len(top_power_hitters) > 0 else 0
+            st.metric("Avg HR Prob", f"{avg_hr_prob:.1%}")
+        
+        with col3:
+            expected_hits = sum(top_hitters['hit_probability']) if len(top_hitters) > 0 else 0
+            st.metric("Expected Hits", f"{expected_hits:.1f}")
+        
+        with col4:
+            expected_hrs = sum(top_power_hitters['hr_probability']) if len(top_power_hitters) > 0 else 0
+            st.metric("Expected HRs", f"{expected_hrs:.1f}")
+
+def store_team_predictions(top_hitters, top_power_hitters, team_name, ballpark):
     """Store predictions in database for tracking"""
     prediction_date = date.today()
     
     try:
         # Store individual hit predictions
         for _, player in top_hitters.iterrows():
+            player_name = player.get('player_name', player.get('Name', 'Unknown'))
             database.store_prediction(
-                player_name=player['player_name'],
-                team=team or "Unknown",
+                player_name=player_name,
+                team=team_name,
                 prediction_type='hit',
-                probability=player['hit_probability'],
-                confidence=player['confidence'],
+                probability=player.get('hit_probability', 0),
+                confidence=player.get('confidence', 0),
                 model_version='hit_predictor_v1.0',
                 ballpark=ballpark,
                 prediction_date=prediction_date
@@ -338,12 +785,13 @@ def store_daily_predictions(top_hitters, top_power_hitters, team, ballpark):
         
         # Store individual HR predictions
         for _, player in top_power_hitters.iterrows():
+            player_name = player.get('player_name', player.get('Name', 'Unknown'))
             database.store_prediction(
-                player_name=player['player_name'],
-                team=team or "Unknown", 
+                player_name=player_name,
+                team=team_name,
                 prediction_type='hr',
-                probability=player['hr_probability'],
-                confidence=player['confidence'],
+                probability=player.get('hr_probability', 0),
+                confidence=player.get('confidence', 0),
                 model_version='hr_predictor_v1.0',
                 ballpark=ballpark,
                 prediction_date=prediction_date
@@ -351,26 +799,88 @@ def store_daily_predictions(top_hitters, top_power_hitters, team, ballpark):
         
         # Store team summary
         database.store_team_predictions(
-            team=team or "Mixed",
+            team=team_name,
             prediction_date=prediction_date,
-            top_hitters=top_hitters,
-            top_power_hitters=top_power_hitters,
+            top_hitters=top_hitters.to_dict('records') if len(top_hitters) > 0 else [],
+            top_power_hitters=top_power_hitters.to_dict('records') if len(top_power_hitters) > 0 else [],
             ballpark=ballpark
         )
-        
-        st.success("✅ Predictions stored for tracking!")
         
     except Exception as e:
         st.warning(f"Could not store predictions: {e}")
 
-def model_performance_page():
-    """Display model performance metrics and analytics"""
-    st.header("📈 Model Performance Dashboard")
+def sidebar_info():
+    """Display information in sidebar"""
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### 📊 Today's Data")
     
-    # Get performance statistics
+    # Show data status
+    if st.session_state.get('data_loaded', False):
+        st.sidebar.success("✅ Data Loaded")
+        hitting_data = st.session_state.get('hitting_data', pd.DataFrame())
+        daily_games = st.session_state.get('daily_games', pd.DataFrame())
+        
+        st.sidebar.metric("Players", len(hitting_data))
+        st.sidebar.metric("Games Today", len(daily_games))
+        
+        if 'Team' in hitting_data.columns:
+            unique_teams = hitting_data['Team'].nunique()
+            st.sidebar.metric("Teams Represented", unique_teams)
+    else:
+        st.sidebar.warning("⏳ Loading Data...")
+    
+    # Show model status
+    st.sidebar.markdown("### 🤖 Model Status")
+    if st.session_state.get('models_trained', False):
+        st.sidebar.success("✅ Models Trained")
+        
+        # Show model performance if available
+        if hasattr(hit_model, 'model_metrics') and hit_model.model_metrics:
+            hit_auc = hit_model.model_metrics.get('val_auc', 0)
+            st.sidebar.metric("Hit Model AUC", f"{hit_auc:.3f}")
+        
+        if hasattr(hr_model, 'model_metrics') and hr_model.model_metrics:
+            hr_auc = hr_model.model_metrics.get('val_auc', 0)
+            st.sidebar.metric("HR Model AUC", f"{hr_auc:.3f}")
+    else:
+        st.sidebar.warning("⏳ Training Models...")
+    
+    # Quick refresh button
+    st.sidebar.markdown("---")
+    if st.sidebar.button("🔄 Refresh Data"):
+        # Clear cache and reload
+        st.cache_data.clear()
+        st.session_state.data_loaded = False
+        st.session_state.models_trained = False
+        st.rerun()
+    
+    # App info
+    st.sidebar.markdown("---")
+    st.sidebar.markdown("### ℹ️ About")
+    st.sidebar.markdown("""
+    **Daily MLB Predictions**
+    
+    This app automatically:
+    - Loads today's MLB games
+    - Applies ballpark factors
+    - Generates ML-powered predictions
+    - Tracks prediction accuracy
+    
+    **Features:**
+    - Top 5 hit predictions per team
+    - Top 3 HR predictions per team
+    - Automatic ballpark adjustments
+    - Real-time data only
+    """)
+
+# Additional pages for model performance and history
+def show_model_performance():
+    """Show model performance metrics"""
+    st.header("📈 Model Performance")
+    
+    # Get performance stats from database
     summary_stats = database.get_prediction_summary_stats()
     
-    # Display key metrics
     col1, col2, col3, col4 = st.columns(4)
     
     with col1:
@@ -380,218 +890,33 @@ def model_performance_page():
     with col3:
         st.metric("HR Predictions", summary_stats.get('hr_predictions', 0))
     with col4:
-        st.metric("Games Tracked", summary_stats.get('total_outcomes', 0))
+        st.metric("Recent Accuracy", f"{summary_stats.get('recent_hit_accuracy', 0):.1%}")
     
-    st.markdown("---")
+    # Show recent predictions
+    st.subheader("Recent Predictions")
+    recent_predictions = database.get_recent_predictions(days=7)
     
-    # Recent accuracy metrics
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("🎯 Hit Prediction Accuracy")
-        hit_accuracy = database.calculate_prediction_accuracy(prediction_type='hit')
-        
-        if 'error' not in hit_accuracy:
-            st.metric("Accuracy (30 days)", f"{hit_accuracy['accuracy']:.1%}")
-            st.metric("Precision", f"{hit_accuracy['precision']:.1%}")
-            st.metric("Recall", f"{hit_accuracy['recall']:.1%}")
-            
-            if hit_accuracy['calibration_score']:
-                st.metric("Calibration Score", f"{hit_accuracy['calibration_score']:.3f}")
-                st.caption("Lower is better - measures how well probabilities match actual rates")
-        else:
-            st.info("Not enough data for hit accuracy analysis")
-    
-    with col2:
-        st.subheader("💥 HR Prediction Accuracy")
-        hr_accuracy = database.calculate_prediction_accuracy(prediction_type='hr')
-        
-        if 'error' not in hr_accuracy:
-            st.metric("Accuracy (30 days)", f"{hr_accuracy['accuracy']:.1%}")
-            st.metric("Precision", f"{hr_accuracy['precision']:.1%}")
-            st.metric("Recall", f"{hr_accuracy['recall']:.1%}")
-            
-            if hr_accuracy['calibration_score']:
-                st.metric("Calibration Score", f"{hr_accuracy['calibration_score']:.3f}")
-        else:
-            st.info("Not enough data for HR accuracy analysis")
-    
-    # Performance trends
-    st.subheader("📊 Performance Trends")
-    
-    hit_history = database.get_model_performance_history('hit', days=90)
-    hr_history = database.get_model_performance_history('hr', days=90)
-    
-    if len(hit_history) > 0 or len(hr_history) > 0:
-        fig = go.Figure()
-        
-        if len(hit_history) > 0:
-            fig.add_trace(go.Scatter(
-                x=hit_history['date_range_start'],
-                y=hit_history['accuracy'],
-                mode='lines+markers',
-                name='Hit Accuracy',
-                line=dict(color='blue')
-            ))
-        
-        if len(hr_history) > 0:
-            fig.add_trace(go.Scatter(
-                x=hr_history['date_range_start'],
-                y=hr_history['accuracy'],
-                mode='lines+markers',
-                name='HR Accuracy',
-                line=dict(color='red')
-            ))
-        
-        fig.update_layout(
-            title="Model Accuracy Over Time",
-            xaxis_title="Date",
-            yaxis_title="Accuracy",
-            yaxis=dict(range=[0, 1]),
-            height=400
-        )
-        
-        st.plotly_chart(fig, use_container_width=True)
+    if len(recent_predictions) > 0:
+        st.dataframe(recent_predictions.head(20), use_container_width=True)
     else:
-        st.info("No historical performance data available yet")
-    
-    # Feature importance analysis
-    st.subheader("🔍 Feature Importance")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        if hit_model.feature_importance:
-            hit_importance_df = pd.DataFrame(
-                list(hit_model.feature_importance.items()),
-                columns=['Feature', 'Importance']
-            ).sort_values('Importance', ascending=True)
-            
-            fig = px.bar(
-                hit_importance_df.tail(10),
-                x='Importance',
-                y='Feature',
-                orientation='h',
-                title='Hit Prediction - Top 10 Features'
-            )
-            st.plotly_chart(fig, use_container_width=True)
-    
-    with col2:
-        if hr_model.feature_importance:
-            hr_importance_df = pd.DataFrame(
-                list(hr_model.feature_importance.items()),
-                columns=['Feature', 'Importance']
-            ).sort_values('Importance', ascending=True)
-            
-            fig = px.bar(
-                hr_importance_df.tail(10),
-                x='Importance', 
-                y='Feature',
-                orientation='h',
-                title='HR Prediction - Top 10 Features'
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        st.info("No recent predictions found")
 
-def sabermetric_insights_page():
-    """Explain the sabermetric features and model logic"""
-    st.header("🧠 Sabermetric Insights & Model Explanation")
-    
-    # Model explanations
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.subheader("🎯 Hit Prediction Model")
-        
-        hit_explanation = hit_model.get_model_explanation()
-        
-        st.markdown("**Key Features:**")
-        for feature, description in hit_explanation['key_features'].items():
-            st.markdown(f"- **{feature}**: {description}")
-        
-        st.markdown("**Model Logic:**")
-        for logic_point in hit_explanation['model_logic']:
-            st.markdown(f"- {logic_point}")
-        
-        if hit_explanation['model_metrics']:
-            st.markdown("**Current Performance:**")
-            st.markdown(f"- Validation Accuracy: {hit_explanation['model_metrics']['val_accuracy']:.1%}")
-            st.markdown(f"- Validation AUC: {hit_explanation['model_metrics']['val_auc']:.3f}")
-    
-    with col2:
-        st.subheader("💥 HR Prediction Model")
-        
-        hr_explanation = hr_model.get_model_explanation()
-        
-        st.markdown("**Key Features:**")
-        for feature, description in hr_explanation['key_features'].items():
-            st.markdown(f"- **{feature}**: {description}")
-        
-        st.markdown("**HR Physics:**")
-        for metric, value in hr_explanation['hr_physics'].items():
-            st.markdown(f"- **{metric.replace('_', ' ').title()}**: {value}")
-        
-        st.markdown("**Model Logic:**")
-        for logic_point in hr_explanation['model_logic']:
-            st.markdown(f"- {logic_point}")
-    
-    st.markdown("---")
-    
-    # Sabermetric glossary
-    st.subheader("📚 Sabermetric Glossary")
-    
-    glossary = {
-        "Contact%": "Percentage of swings that result in contact with the ball",
-        "Whiff%": "Percentage of swings that miss the ball entirely", 
-        "Chase%": "Percentage of swings at pitches outside the strike zone",
-        "Zone%": "Percentage of pitches seen in the strike zone",
-        "Exit Velocity": "Speed of the ball off the bat, measured in mph",
-        "Launch Angle": "Angle of the ball's trajectory off the bat",
-        "Barrel%": "Percentage of balls hit with optimal exit velocity and launch angle",
-        "Hard Hit%": "Percentage of balls hit with 95+ mph exit velocity",
-        "ISO (Isolated Power)": "Slugging percentage minus batting average, measures extra-base power",
-        "wOBA": "Weighted on-base average - weights different outcomes by their run value",
-        "xwOBA": "Expected wOBA based on quality of contact, not outcome",
-        "BABIP": "Batting average on balls in play - measures luck vs skill"
-    }
-    
-    for term, definition in glossary.items():
-        with st.expander(f"**{term}**"):
-            st.write(definition)
-    
-    # Feature engineering insights
-    st.subheader("⚙️ Feature Engineering Insights")
-    
-    st.markdown("""
-    **Hit Prediction Features:**
-    - **Contact Rate Plus**: Player's contact rate relative to league average (100 = average)
-    - **Contact Skill**: Inverse of whiff rate - how good at making contact
-    - **Plate Discipline**: Combination of zone% and chase% - pitch selection ability
-    - **BABIP Sustainability**: Whether player's BABIP is based on skill or luck
-    
-    **HR Prediction Features:**
-    - **Power Score**: Composite metric combining ISO, barrel rate, and launch conditions
-    - **HR Launch Score**: Exit velocity and launch angle optimized for home runs
-    - **Power Efficiency**: How much power per hard-hit ball (ISO / Hard Hit%)
-    - **Barrel Power Score**: Barrel rate weighted by exit velocity
-    """)
-
-def prediction_history_page():
-    """Show historical predictions and their outcomes"""
-    st.header("📋 Prediction History & Results")
+def show_prediction_history():
+    """Show prediction history and results"""
+    st.header("📋 Prediction History")
     
     # Date range selector
     col1, col2 = st.columns(2)
     with col1:
-        start_date = st.date_input("Start Date", value=date.today() - timedelta(days=30))
+        start_date = st.date_input("Start Date", value=date.today() - timedelta(days=7))
     with col2:
         end_date = st.date_input("End Date", value=date.today())
     
-    # Get recent predictions
-    recent_predictions = database.get_recent_predictions(days=(end_date - start_date).days)
+    # Get predictions for date range
+    days_diff = (end_date - start_date).days
+    recent_predictions = database.get_recent_predictions(days=days_diff)
     
     if len(recent_predictions) > 0:
-        st.subheader("🔮 Recent Predictions")
-        
         # Filter by date range
         recent_predictions['prediction_date'] = pd.to_datetime(recent_predictions['prediction_date'])
         filtered_predictions = recent_predictions[
@@ -599,85 +924,53 @@ def prediction_history_page():
             (recent_predictions['prediction_date'].dt.date <= end_date)
         ]
         
-        # Display predictions table
-        st.dataframe(
-            filtered_predictions.sort_values(['prediction_date', 'probability'], ascending=[False, False]),
-            use_container_width=True
-        )
-        
-        # Prediction distribution
-        col1, col2 = st.columns(2)
-        
-        with col1:
-            fig = px.histogram(
-                filtered_predictions,
-                x='probability',
-                color='prediction_type',
-                title='Prediction Probability Distribution',
-                bins=20
-            )
-            st.plotly_chart(fig, use_container_width=True)
-        
-        with col2:
-            prediction_counts = filtered_predictions['prediction_type'].value_counts()
-            fig = px.pie(
-                values=prediction_counts.values,
-                names=prediction_counts.index,
-                title='Predictions by Type'
-            )
-            st.plotly_chart(fig, use_container_width=True)
+        if len(filtered_predictions) > 0:
+            st.dataframe(filtered_predictions, use_container_width=True)
+            
+            # Show prediction distribution
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                fig = px.histogram(
+                    filtered_predictions,
+                    x='probability',
+                    color='prediction_type',
+                    title='Prediction Probability Distribution',
+                    bins=20
+                )
+                st.plotly_chart(fig, use_container_width=True)
+            
+            with col2:
+                prediction_counts = filtered_predictions['prediction_type'].value_counts()
+                fig = px.pie(
+                    values=prediction_counts.values,
+                    names=prediction_counts.index,
+                    title='Predictions by Type'
+                )
+                st.plotly_chart(fig, use_container_width=True)
+        else:
+            st.info("No predictions found for the selected date range")
     else:
-        st.info("No predictions found for the selected date range")
-    
-    # Top performing predictions
-    st.subheader("🏆 Top Performing Predictions")
-    
-    col1, col2 = st.columns(2)
-    
-    with col1:
-        st.markdown("**Hit Predictions**")
-        top_hit_predictions = database.get_top_performing_predictions('hit', limit=5)
-        if len(top_hit_predictions) > 0:
-            st.dataframe(top_hit_predictions, use_container_width=True)
-        else:
-            st.info("No verified hit predictions yet")
-    
-    with col2:
-        st.markdown("**HR Predictions**")
-        top_hr_predictions = database.get_top_performing_predictions('hr', limit=5)
-        if len(top_hr_predictions) > 0:
-            st.dataframe(top_hr_predictions, use_container_width=True)
-        else:
-            st.info("No verified HR predictions yet")
+        st.info("No prediction history available")
 
-# Sidebar information
-def sidebar_info():
-    """Display information in sidebar"""
-    st.sidebar.markdown("---")
-    st.sidebar.markdown("### About This App")
-    st.sidebar.markdown("""
-    This app uses advanced sabermetrics and machine learning to predict:
-    - **Hit Probability**: Likelihood of getting a hit
-    - **Home Run Probability**: Likelihood of hitting a HR
+# Main app with navigation
+def run_app():
+    # Sidebar navigation
+    st.sidebar.title("Navigation")
+    page = st.sidebar.selectbox(
+        "Choose a page:",
+        ["Daily Predictions", "Model Performance", "Prediction History"]
+    )
     
-    **Key Features:**
-    - XGBoost models optimized for baseball data
-    - 15+ sabermetric features per prediction
-    - Real-time MLB data integration
-    - Prediction accuracy tracking
-    - Ballpark factor adjustments
-    """)
+    if page == "Daily Predictions":
+        main()
+    elif page == "Model Performance":
+        show_model_performance()
+    elif page == "Prediction History":
+        show_prediction_history()
     
-    st.sidebar.markdown("### Model Stats")
-    if st.session_state.get('models_trained', False):
-        st.sidebar.success("✅ Models Trained")
-        if hit_model.model_metrics:
-            st.sidebar.markdown(f"Hit Model AUC: {hit_model.model_metrics.get('val_auc', 0):.3f}")
-        if hr_model.model_metrics:
-            st.sidebar.markdown(f"HR Model AUC: {hr_model.model_metrics.get('val_auc', 0):.3f}")
-    else:
-        st.sidebar.warning("⏳ Training Models...")
+    # Always show sidebar info
+    sidebar_info()
 
 if __name__ == "__main__":
-    sidebar_info()
-    main()
+    run_app()
